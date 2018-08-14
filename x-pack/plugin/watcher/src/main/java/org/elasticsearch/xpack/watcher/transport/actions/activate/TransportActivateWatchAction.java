@@ -20,10 +20,10 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.license.XPackLicenseState;
+import org.elasticsearch.protocol.xpack.watcher.ActivateWatchResponse;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.watcher.transport.actions.activate.ActivateWatchAction;
 import org.elasticsearch.xpack.core.watcher.transport.actions.activate.ActivateWatchRequest;
-import org.elasticsearch.xpack.core.watcher.transport.actions.activate.ActivateWatchResponse;
 import org.elasticsearch.xpack.core.watcher.watch.Watch;
 import org.elasticsearch.xpack.core.watcher.watch.WatchField;
 import org.elasticsearch.protocol.xpack.watcher.status.WatchStatusField;
@@ -83,7 +83,7 @@ public class TransportActivateWatchAction extends WatcherTransportAction<Activat
                                         XContentType.JSON);
                                 watch.version(getResponse.getVersion());
                                 watch.status().version(getResponse.getVersion());
-                                listener.onResponse(new ActivateWatchResponse(watch.status()));
+                                listener.onResponse(new ActivateWatchResponse(watch.status().toProtocolStatus()));
                             } else {
                                 listener.onFailure(new ResourceNotFoundException("Watch with id [{}] does not exist",
                                         request.getWatchId()));
