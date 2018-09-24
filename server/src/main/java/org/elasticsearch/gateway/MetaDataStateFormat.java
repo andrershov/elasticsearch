@@ -49,7 +49,7 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -80,21 +80,19 @@ public abstract class MetaDataStateFormat<T> {
     protected MetaDataStateFormat(String prefix) {
         this.prefix = prefix;
         this.stateFilePattern = Pattern.compile(Pattern.quote(prefix) + "(\\d+)(" + MetaDataStateFormat.STATE_FILE_EXTENSION + ")?");
+
     }
 
-    private static void deleteFileIfExists(Path stateLocation, Directory directory, String fileName) throws IOException {
+    private static void deleteFileIgnoreNotFound(Directory directory, String fileName) throws IOException {
         try {
             directory.deleteFile(fileName);
         } catch (FileNotFoundException | NoSuchFileException ignored) {
 
         }
-        logger.trace("cleaned up {}", stateLocation.resolve(fileName));
     }
 
-    private void writeStateToFirstLocation(final T state, Path stateLocation, Directory stateDir, String fileName, String tmpFileName)
-            throws IOException {
+    private void writeStateToFirstLocation(final T state, Directory stateDir, String fileName, String tmpFileName) throws IOException {
         try {
-            deleteFileIfExists(stateLocation, stateDir, tmpFileName);
             try (IndexOutput out = stateDir.createOutput(tmpFileName, IOContext.DEFAULT)) {
                 CodecUtil.writeHeader(out, STATE_FILE_CODEC, STATE_FILE_VERSION);
                 out.writeInt(FORMAT.index());
@@ -118,24 +116,22 @@ public abstract class MetaDataStateFormat<T> {
             stateDir.sync(Collections.singleton(tmpFileName));
             stateDir.rename(tmpFileName, fileName);
             stateDir.syncMetaData();
-            logger.trace("written state to {}", stateLocation.resolve(fileName));
         } finally {
-            deleteFileIfExists(stateLocation, stateDir, tmpFileName);
+            deleteFileIgnoreNotFound(stateDir, tmpFileName);
         }
     }
+
 
     private void copyStateToExtraLocation(Directory srcStateDir, Path extraStateLocation, String fileName, String tmpFileName)
             throws IOException {
         try (Directory extraStateDir = newDirectory(extraStateLocation)) {
             try {
-                deleteFileIfExists(extraStateLocation, extraStateDir, tmpFileName);
                 extraStateDir.copyFrom(srcStateDir, fileName, tmpFileName, IOContext.DEFAULT);
                 extraStateDir.sync(Collections.singleton(tmpFileName));
                 extraStateDir.rename(tmpFileName, fileName);
                 extraStateDir.syncMetaData();
-                logger.trace("copied state to {}", extraStateLocation.resolve(fileName));
             } finally {
-                deleteFileIfExists(extraStateLocation, extraStateDir, tmpFileName);
+                deleteFileIgnoreNotFound(extraStateDir, tmpFileName);
             }
         }
     }
@@ -166,11 +162,13 @@ public abstract class MetaDataStateFormat<T> {
         final String tmpFileName = fileName + ".tmp";
         final Path firstStateLocation = locations[0].resolve(STATE_DIR_NAME);
         try (Directory stateDir = newDirectory(firstStateLocation)) {
-            writeStateToFirstLocation(state, firstStateLocation, stateDir, fileName, tmpFileName);
+            writeStateToFirstLocation(state, stateDir, fileName, tmpFileName);
+            logger.trace("written state to {}", firstStateLocation.resolve(fileName));
 
-            for (int i = 1; i < locations.length; i++) {
-                final Path extraStateLocation = locations[i].resolve(STATE_DIR_NAME);
+            for (Path extraLocation : locations) {
+                final Path extraStateLocation = extraLocation.resolve(STATE_DIR_NAME);
                 copyStateToExtraLocation(stateDir, extraStateLocation, fileName, tmpFileName);
+                logger.trace("copied state to {}", extraStateLocation.resolve(fileName));
             }
         }
 
@@ -228,28 +226,20 @@ public abstract class MetaDataStateFormat<T> {
     }
 
     private void cleanupOldFiles(final String currentStateFile, Path[] locations) throws IOException {
-        for (Path location : locations) {
-            logger.trace("cleanupOldFiles: cleaning up {}", location);
+        for (Path location: locations){
             Path stateLocation = location.resolve(STATE_DIR_NAME);
-            try (Directory stateDir = newDirectory(stateLocation)) {
-                for (String file : stateDir.listAll()) {
-                    if (file.startsWith(prefix) && file.equals(currentStateFile) == false) {
-                        deleteFileIfExists(stateLocation, stateDir, file);
+            try (Directory stateDir = newDirectory(stateLocation)){
+                for (String file : stateDir.listAll()){
+                    if (file.startsWith(prefix) && file.equals(currentStateFile) == false){
+                        deleteFileIgnoreNotFound(stateDir, file);
+                        logger.trace("cleanupOldFiles: cleaned up {}", stateLocation.resolve(file));
                     }
                 }
             }
         }
     }
 
-    /**
-     * Finds state file with maximum id.
-     *
-     * @param prefix    - filename prefix
-     * @param locations - paths to directories with state folder
-     * @return maximum id of state file or -1 if no such files are found
-     * @throws IOException if IOException occurs
-     */
-    private long findMaxStateId(final String prefix, Path... locations) throws IOException {
+    long findMaxStateId(final String prefix, Path... locations) throws IOException {
         long maxId = -1;
         for (Path dataLocation : locations) {
             final Path resolve = dataLocation.resolve(STATE_DIR_NAME);
@@ -268,24 +258,6 @@ public abstract class MetaDataStateFormat<T> {
         return maxId;
     }
 
-    private List<Path> findStateFilesByGeneration(final long generation, Path... locations) {
-        List<Path> files = new ArrayList<>();
-        if (generation == -1) {
-            return files;
-        }
-
-        final String fileName = prefix + generation + STATE_FILE_EXTENSION;
-        for (Path dataLocation : locations) {
-            final Path stateFilePath = dataLocation.resolve(STATE_DIR_NAME).resolve(fileName);
-            if (Files.exists(stateFilePath)) {
-                logger.trace("found state file: {}", stateFilePath);
-                files.add(stateFilePath);
-            }
-        }
-
-        return files;
-    }
-
     /**
      * Tries to load the latest state from the given data-locations. It tries to load the latest state determined by
      * the states version from one or more data directories and if none of the latest states can be loaded an exception
@@ -296,37 +268,76 @@ public abstract class MetaDataStateFormat<T> {
      * @return the latest state or <code>null</code> if no state was found.
      */
     public T loadLatestState(Logger logger, NamedXContentRegistry namedXContentRegistry, Path... dataLocations) throws IOException {
-        long maxStateId = findMaxStateId(prefix, dataLocations);
-        List<Path> stateFiles = findStateFilesByGeneration(maxStateId, dataLocations);
-
-        if (maxStateId > -1 && stateFiles.isEmpty()) {
-            throw new IllegalStateException("unable to find state files with state id " + maxStateId +
-                    " returned by findMaxStateId function, in data folders [" +
-                    Arrays.stream(dataLocations).map(Path::toAbsolutePath).
-                            map(Object::toString).collect(Collectors.joining(", ")) +
-                    "], concurrent writes?");
+        List<PathAndStateId> files = new ArrayList<>();
+        long maxStateId = -1;
+        if (dataLocations != null) { // select all eligible files first
+            for (Path dataLocation : dataLocations) {
+                final Path stateDir = dataLocation.resolve(STATE_DIR_NAME);
+                // now, iterate over the current versions, and find latest one
+                // we don't check if the stateDir is present since it could be deleted
+                // after the check. Also if there is a _state file and it's not a dir something is really wrong
+                // we don't pass a glob since we need the group part for parsing
+                try (DirectoryStream<Path> paths = Files.newDirectoryStream(stateDir)) {
+                    for (Path stateFile : paths) {
+                        final Matcher matcher = stateFilePattern.matcher(stateFile.getFileName().toString());
+                        if (matcher.matches()) {
+                            final long stateId = Long.parseLong(matcher.group(1));
+                            maxStateId = Math.max(maxStateId, stateId);
+                            PathAndStateId pav = new PathAndStateId(stateFile, stateId);
+                            logger.trace("found state file: {}", pav);
+                            files.add(pav);
+                        }
+                    }
+                } catch (NoSuchFileException | FileNotFoundException ex) {
+                    // no _state directory -- move on
+                }
+            }
         }
+        // NOTE: we might have multiple version of the latest state if there are multiple data dirs.. for this case
+        //       we iterate only over the ones with the max version.
+        long finalMaxStateId = maxStateId;
+        Collection<PathAndStateId> pathAndStateIds = files
+                .stream()
+                .filter(pathAndStateId -> pathAndStateId.id == finalMaxStateId)
+                .collect(Collectors.toCollection(ArrayList::new));
 
         final List<Throwable> exceptions = new ArrayList<>();
-        for (Path stateFile : stateFiles) {
+        for (PathAndStateId pathAndStateId : pathAndStateIds) {
             try {
-                T state = read(namedXContentRegistry, stateFile);
-                logger.trace("state id [{}] read from [{}]", maxStateId, stateFile.getFileName());
+                T state = read(namedXContentRegistry, pathAndStateId.file);
+                logger.trace("state id [{}] read from [{}]", pathAndStateId.id, pathAndStateId.file.getFileName());
                 return state;
             } catch (Exception e) {
-                exceptions.add(new IOException("failed to read " + stateFile.toAbsolutePath(), e));
+                exceptions.add(new IOException("failed to read " + pathAndStateId.toString(), e));
                 logger.debug(() -> new ParameterizedMessage(
-                        "{}: failed to read [{}], ignoring...", stateFile.toAbsolutePath(), prefix), e);
+                        "{}: failed to read [{}], ignoring...", pathAndStateId.file.toAbsolutePath(), prefix), e);
             }
         }
         // if we reach this something went wrong
         ExceptionsHelper.maybeThrowRuntimeAndSuppress(exceptions);
-        if (stateFiles.size() > 0) {
+        if (files.size() > 0) {
             // We have some state files but none of them gave us a usable state
-            throw new IllegalStateException("Could not find a state file to recover from among " +
-                    stateFiles.stream().map(Path::toAbsolutePath).map(Object::toString).collect(Collectors.joining(", ")));
+            throw new IllegalStateException("Could not find a state file to recover from among " + files);
         }
         return null;
+    }
+
+    /**
+     * Internal struct-like class that holds the parsed state id and the file
+     */
+    private static class PathAndStateId {
+        final Path file;
+        final long id;
+
+        private PathAndStateId(Path file, long id) {
+            this.file = file;
+            this.id = id;
+        }
+
+        @Override
+        public String toString() {
+            return "[id:" + id + ", file:" + file.toAbsolutePath() + "]";
+        }
     }
 
     /**
