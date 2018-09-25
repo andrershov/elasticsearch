@@ -57,6 +57,18 @@ import java.util.function.UnaryOperator;
 import static java.util.Collections.emptySet;
 import static java.util.Collections.unmodifiableSet;
 
+/**
+ * This class is responsible for storing/retrieving metadata to/from disk.
+ * When instance of this class is created, constructor ensures that this version is compatible with state stored on disk and performs
+ * state upgrade if necessary. Also it checks that atomic move is supported on the filesystem level, because it's a must for metadata
+ * store algorithm.
+ * Please note that the state being loaded when constructing the instance of this class is NOT the state that will be used as a
+ * {@link ClusterState#metaData()}. Instead when node is starting up, it calls {@link #loadMetaState()} method and if this node is
+ * elected as master, it requests metaData from other master eligible nodes. After that, master node performs re-conciliation on the
+ * gathered results, re-creates {@link ClusterState} and broadcasts this state to other nodes in the cluster.
+ * It means that the first time {@link #applyClusterState(ClusterChangedEvent)} method is called, it won't have any previous metaData in
+ * memory and will iterate over all the indices in received {@link ClusterState} and store them to disk.
+ */
 public class GatewayMetaState extends AbstractComponent implements ClusterStateApplier {
 
     private final NodeEnvironment nodeEnv;
@@ -73,16 +85,23 @@ public class GatewayMetaState extends AbstractComponent implements ClusterStateA
         this.nodeEnv = nodeEnv;
         this.metaStateService = metaStateService;
 
-        if (DiscoveryNode.isDataNode(settings)) {
-            ensureNoPre019ShardState(nodeEnv);
-        }
+        ensureNoPre019State();
+        ensureAtomicMoveSupported();
+        maybeUpgradeMetaData(metaDataIndexUpgradeService, metaDataUpgrader);
+        profileLoadMetaData();
+    }
 
+    private void profileLoadMetaData() throws IOException {
         if (DiscoveryNode.isMasterNode(settings) || DiscoveryNode.isDataNode(settings)) {
-            nodeEnv.ensureAtomicMoveSupported();
+            long startNS = System.nanoTime();
+            metaStateService.loadFullState();
+            logger.debug("took {} to load state", TimeValue.timeValueMillis(TimeValue.nsecToMSec(System.nanoTime() - startNS)));
         }
+    }
+
+    private void maybeUpgradeMetaData(MetaDataIndexUpgradeService metaDataIndexUpgradeService, MetaDataUpgrader metaDataUpgrader) throws IOException {
         if (DiscoveryNode.isMasterNode(settings) || DiscoveryNode.isDataNode(settings)) {
             try {
-                ensureNoPre019State();
                 final MetaData metaData = metaStateService.loadFullState();
                 final MetaData upgradedMetaData = upgradeMetaData(metaData, metaDataIndexUpgradeService, metaDataUpgrader);
                 // We finished global state validation and successfully checked all indices for backward compatibility
@@ -98,13 +117,16 @@ public class GatewayMetaState extends AbstractComponent implements ClusterStateA
                         }
                     }
                 }
-                long startNS = System.nanoTime();
-                metaStateService.loadFullState();
-                logger.debug("took {} to load state", TimeValue.timeValueMillis(TimeValue.nsecToMSec(System.nanoTime() - startNS)));
             } catch (Exception e) {
                 logger.error("failed to read local state, exiting...", e);
                 throw e;
             }
+        }
+    }
+
+    private void ensureAtomicMoveSupported() throws IOException {
+        if (DiscoveryNode.isMasterNode(settings) || DiscoveryNode.isDataNode(settings)) {
+            nodeEnv.ensureAtomicMoveSupported();
         }
     }
 
@@ -114,7 +136,6 @@ public class GatewayMetaState extends AbstractComponent implements ClusterStateA
 
     @Override
     public void applyClusterState(ClusterChangedEvent event) {
-
         final ClusterState state = event.state();
         if (state.blocks().disableStatePersistence()) {
             // reset the current metadata, we need to start fresh...
@@ -148,7 +169,7 @@ public class GatewayMetaState extends AbstractComponent implements ClusterStateA
                                 newPreviouslyWrittenIndices.add(indexMetaDataOnDisk.getIndex());
                             }
                         }
-                        newPreviouslyWrittenIndices.addAll(previouslyWrittenIndices);
+                        //newPreviouslyWrittenIndices.addAll(previouslyWrittenIndices);
                         previouslyWrittenIndices = unmodifiableSet(newPreviouslyWrittenIndices);
                     }
                 } catch (Exception e) {
@@ -200,10 +221,20 @@ public class GatewayMetaState extends AbstractComponent implements ClusterStateA
         return ((state.nodes().getLocalNode().isMasterNode() == false) && state.nodes().getLocalNode().isDataNode());
     }
 
+
+    private void ensureNoPre019State() throws IOException {
+        if (DiscoveryNode.isDataNode(settings)){
+            ensureNoPre019ShardState();
+        }
+        if (DiscoveryNode.isMasterNode(settings) || DiscoveryNode.isDataNode(settings)){
+            ensureNoPre019State();
+        }
+    }
+
     /**
      * Throws an IAE if a pre 0.19 state is detected
      */
-    private void ensureNoPre019State() throws IOException {
+    private void ensureNoPre019MetadataFiles() throws IOException {
         for (Path dataLocation : nodeEnv.nodeDataPaths()) {
             final Path stateLocation = dataLocation.resolve(MetaDataStateFormat.STATE_DIR_NAME);
             if (!Files.exists(stateLocation)) {
@@ -219,6 +250,22 @@ public class GatewayMetaState extends AbstractComponent implements ClusterStateA
                         throw new IllegalStateException("Detected pre 0.19 metadata file please upgrade to a version before "
                             + Version.CURRENT.minimumIndexCompatibilityVersion()
                             + " first to upgrade state structures - metadata found: [" + stateFile.getParent().toAbsolutePath());
+                    }
+                }
+            }
+        }
+    }
+
+    // shard state BWC
+    private void ensureNoPre019ShardState() throws IOException {
+        for (Path dataLocation : nodeEnv.nodeDataPaths()) {
+            final Path stateLocation = dataLocation.resolve(MetaDataStateFormat.STATE_DIR_NAME);
+            if (Files.exists(stateLocation)) {
+                try (DirectoryStream<Path> stream = Files.newDirectoryStream(stateLocation, "shards-*")) {
+                    for (Path stateFile : stream) {
+                        throw new IllegalStateException("Detected pre 0.19 shard state file please upgrade to a version before "
+                                + Version.CURRENT.minimumIndexCompatibilityVersion()
+                                + " first to upgrade state structures - shard state found: [" + stateFile.getParent().toAbsolutePath());
                     }
                 }
             }
@@ -280,21 +327,7 @@ public class GatewayMetaState extends AbstractComponent implements ClusterStateA
         return false;
     }
 
-    // shard state BWC
-    private void ensureNoPre019ShardState(NodeEnvironment nodeEnv) throws IOException {
-        for (Path dataLocation : nodeEnv.nodeDataPaths()) {
-            final Path stateLocation = dataLocation.resolve(MetaDataStateFormat.STATE_DIR_NAME);
-            if (Files.exists(stateLocation)) {
-                try (DirectoryStream<Path> stream = Files.newDirectoryStream(stateLocation, "shards-*")) {
-                    for (Path stateFile : stream) {
-                        throw new IllegalStateException("Detected pre 0.19 shard state file please upgrade to a version before "
-                                + Version.CURRENT.minimumIndexCompatibilityVersion()
-                                + " first to upgrade state structures - shard state found: [" + stateFile.getParent().toAbsolutePath());
-                    }
-                }
-            }
-        }
-    }
+
 
     /**
      * Loads the current meta state for each index in the new cluster state and checks if it has to be persisted.
