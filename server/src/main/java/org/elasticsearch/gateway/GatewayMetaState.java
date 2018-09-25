@@ -74,10 +74,25 @@ public class GatewayMetaState extends AbstractComponent implements ClusterStateA
     private final NodeEnvironment nodeEnv;
     private final MetaStateService metaStateService;
 
-    @Nullable
-    private volatile MetaData previousMetaData;
 
-    private volatile Set<Index> previouslyWrittenIndices = emptySet();
+    private static class State {
+        final MetaData previousMetadata;
+        final Set<Index> previouslyWrittenIndices;
+
+        State(MetaData previousMetadata, Set<Index> previouslyWrittenIndices){
+            this.previousMetadata = previousMetadata;
+            this.previouslyWrittenIndices = previouslyWrittenIndices;
+        }
+
+        State(MetaData previousMetadata) {
+            this.previousMetadata = previousMetadata;
+            this.previouslyWrittenIndices = emptySet();
+        }
+    }
+
+    @Nullable
+    private volatile State currentState;
+
 
     public GatewayMetaState(Settings settings, NodeEnvironment nodeEnv, MetaStateService metaStateService,
                             MetaDataIndexUpgradeService metaDataIndexUpgradeService, MetaDataUpgrader metaDataUpgrader) throws IOException {
@@ -138,79 +153,79 @@ public class GatewayMetaState extends AbstractComponent implements ClusterStateA
     public void applyClusterState(ClusterChangedEvent event) {
         final ClusterState state = event.state();
         if (state.blocks().disableStatePersistence()) {
-            // reset the current metadata, we need to start fresh...
-            this.previousMetaData = null;
-            previouslyWrittenIndices = emptySet();
+            // reset the current state, we need to start fresh...
+            currentState = null;
             return;
         }
 
-        MetaData newMetaData = state.metaData();
-        // we don't check if metaData changed, since we might be called several times and we need to check dangling...
-        Set<Index> relevantIndices = Collections.emptySet();
-        boolean success = true;
-        // write the state if this node is a master eligible node or if it is a data node and has shards allocated on it
-        if (state.nodes().getLocalNode().isMasterNode() || state.nodes().getLocalNode().isDataNode()) {
-            success = maybeInitializePreviouslyWrittenIndices(state, newMetaData);
-            success = maybeWriteGlobalState(newMetaData) && success;
-            relevantIndices = getRelevantIndices(event.state(), event.previousState(), previouslyWrittenIndices);
-            success = maybeWriteIndicesMetadata(event, relevantIndices) && success;
-        }
-
-        if (success) {
-            previousMetaData = newMetaData;
-            previouslyWrittenIndices = unmodifiableSet(relevantIndices);
+        try {
+            currentState = maybeUpdateMetadata(event);
+        } catch (Exception e){
+            logger.warn("Exception occurred when storing new meta data", e);
         }
     }
 
-    private boolean maybeWriteIndicesMetadata(ClusterChangedEvent event, Set<Index> relevantIndices) {
-        final Iterable<IndexMetaWriteInfo> writeInfo = resolveStatesToBeWritten(previouslyWrittenIndices, relevantIndices, previousMetaData, event.state().metaData());
+    private State maybeUpdateMetadata(ClusterChangedEvent event) throws IOException {
+        ClusterState newState  = event.state();
+        ClusterState previousState = event.previousState();
+        MetaData newMetaData = newState.metaData();
+
+        if (newState.nodes().getLocalNode().isMasterNode() || newState.nodes().getLocalNode().isDataNode()) {
+            maybeWriteGlobalState(newMetaData);
+            Set<Index> relevantIndices = maybeWriteIndicesMetadata(newState, previousState);
+            return new State(newMetaData, relevantIndices);
+        }
+
+        return new State(newMetaData);
+    }
+
+    private Set<Index> maybeWriteIndicesMetadata(ClusterState newState, ClusterState previousState) throws IOException {
+        MetaData previousMetadata = getPreviousMetadata();
+        Set<Index> previouslyWrittenIndices = getPreviouslyWrittenIndices(newState);
+        Set<Index> relevantIndices = getRelevantIndices(newState, previousState, previouslyWrittenIndices);
+
+        final Iterable<IndexMetaWriteInfo> writeInfo = resolveStatesToBeWritten(previouslyWrittenIndices, relevantIndices,
+                previousMetadata, newState.metaData());
         // check and write changes in indices
         for (IndexMetaWriteInfo indexMetaWrite : writeInfo) {
-            try {
-                metaStateService.writeIndex(indexMetaWrite.reason, indexMetaWrite.newMetaData);
-            } catch (Exception e) {
-                return false;
-            }
+            metaStateService.writeIndex(indexMetaWrite.reason, indexMetaWrite.newMetaData);
         }
-        return true;
+        return relevantIndices;
     }
 
-    private boolean maybeWriteGlobalState(MetaData newMetaData) {
-        if (previousMetaData == null || !MetaData.isGlobalStateEquals(previousMetaData, newMetaData)) {
-            try {
-                metaStateService.writeGlobalState("changed", newMetaData);
-            } catch (Exception e) {
-                return false;
-            }
-        }
-        return true;
+    private MetaData getPreviousMetadata() {
+        return currentState == null ? null : currentState.previousMetadata;
     }
 
-    private boolean maybeInitializePreviouslyWrittenIndices(ClusterState state, MetaData newMetaData) {
-        if (previousMetaData == null) {
-            try {
-                if (isDataOnlyNode(state)) {
-                    previouslyWrittenIndices = getClosedIndicesOnDisk(state, newMetaData);
-                }
-            } catch (Exception e) {
-                return false;
-            }
+    private void maybeWriteGlobalState(MetaData newMetaData) throws IOException {
+        if (currentState == null || !MetaData.isGlobalStateEquals(currentState.previousMetadata, newMetaData)) {
+            metaStateService.writeGlobalState("changed", newMetaData);
         }
-        return true;
     }
 
-    private Set<Index> getClosedIndicesOnDisk(ClusterState state, MetaData newMetaData) throws IOException {
-        Set<Index> newPreviouslyWrittenIndices = new HashSet<>(previouslyWrittenIndices.size());
+    private Set<Index> getPreviouslyWrittenIndices(ClusterState state) throws IOException {
+        if (currentState == null) {
+            if (isDataOnlyNode(state)) {
+                return getClosedIndicesOnDisk(state.metaData());
+            } else {
+                return emptySet();
+            }
+        }
+        return currentState.previouslyWrittenIndices;
+    }
+
+    private Set<Index> getClosedIndicesOnDisk(MetaData newMetaData) throws IOException {
+        Set<Index> closedIndices = new HashSet<>();
         for (IndexMetaData indexMetaData : newMetaData) {
             IndexMetaData indexMetaDataOnDisk = null;
             if (indexMetaData.getState().equals(IndexMetaData.State.CLOSE)) {
                 indexMetaDataOnDisk = metaStateService.loadIndexState(indexMetaData.getIndex());
             }
             if (indexMetaDataOnDisk != null) {
-                newPreviouslyWrittenIndices.add(indexMetaDataOnDisk.getIndex());
+                closedIndices.add(indexMetaDataOnDisk.getIndex());
             }
         }
-        return unmodifiableSet(newPreviouslyWrittenIndices);
+        return unmodifiableSet(closedIndices);
     }
 
     public static Set<Index> getRelevantIndices(ClusterState state, ClusterState previousState, Set<Index> previouslyWrittenIndices) {
