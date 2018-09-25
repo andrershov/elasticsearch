@@ -150,58 +150,67 @@ public class GatewayMetaState extends AbstractComponent implements ClusterStateA
         boolean success = true;
         // write the state if this node is a master eligible node or if it is a data node and has shards allocated on it
         if (state.nodes().getLocalNode().isMasterNode() || state.nodes().getLocalNode().isDataNode()) {
-            if (previousMetaData == null) {
-                try {
-                    // we determine if or if not we write meta data on data only nodes by looking at the shard routing
-                    // and only write if a shard of this index is allocated on this node
-                    // however, closed indices do not appear in the shard routing. if the meta data for a closed index is
-                    // updated it will therefore not be written in case the list of previouslyWrittenIndices is empty (because state
-                    // persistence was disabled or the node was restarted), see getRelevantIndicesOnDataOnlyNode().
-                    // we therefore have to check here if we have shards on disk and add their indices to the previouslyWrittenIndices list
-                    if (isDataOnlyNode(state)) {
-                        Set<Index> newPreviouslyWrittenIndices = new HashSet<>(previouslyWrittenIndices.size());
-                        for (IndexMetaData indexMetaData : newMetaData) {
-                            IndexMetaData indexMetaDataOnDisk = null;
-                            if (indexMetaData.getState().equals(IndexMetaData.State.CLOSE)) {
-                                indexMetaDataOnDisk = metaStateService.loadIndexState(indexMetaData.getIndex());
-                            }
-                            if (indexMetaDataOnDisk != null) {
-                                newPreviouslyWrittenIndices.add(indexMetaDataOnDisk.getIndex());
-                            }
-                        }
-                        //newPreviouslyWrittenIndices.addAll(previouslyWrittenIndices);
-                        previouslyWrittenIndices = unmodifiableSet(newPreviouslyWrittenIndices);
-                    }
-                } catch (Exception e) {
-                    success = false;
-                }
-            }
-            // check if the global state changed?
-            if (previousMetaData == null || !MetaData.isGlobalStateEquals(previousMetaData, newMetaData)) {
-                try {
-                    metaStateService.writeGlobalState("changed", newMetaData);
-                } catch (Exception e) {
-                    success = false;
-                }
-            }
-
-
+            success = maybeInitializePreviouslyWrittenIndices(state, newMetaData);
+            success = maybeWriteGlobalState(newMetaData) && success;
             relevantIndices = getRelevantIndices(event.state(), event.previousState(), previouslyWrittenIndices);
-            final Iterable<IndexMetaWriteInfo> writeInfo = resolveStatesToBeWritten(previouslyWrittenIndices, relevantIndices, previousMetaData, event.state().metaData());
-            // check and write changes in indices
-            for (IndexMetaWriteInfo indexMetaWrite : writeInfo) {
-                try {
-                    metaStateService.writeIndex(indexMetaWrite.reason, indexMetaWrite.newMetaData);
-                } catch (Exception e) {
-                    success = false;
-                }
-            }
+            success = maybeWriteIndicesMetadata(event, relevantIndices) && success;
         }
 
         if (success) {
             previousMetaData = newMetaData;
             previouslyWrittenIndices = unmodifiableSet(relevantIndices);
         }
+    }
+
+    private boolean maybeWriteIndicesMetadata(ClusterChangedEvent event, Set<Index> relevantIndices) {
+        final Iterable<IndexMetaWriteInfo> writeInfo = resolveStatesToBeWritten(previouslyWrittenIndices, relevantIndices, previousMetaData, event.state().metaData());
+        // check and write changes in indices
+        for (IndexMetaWriteInfo indexMetaWrite : writeInfo) {
+            try {
+                metaStateService.writeIndex(indexMetaWrite.reason, indexMetaWrite.newMetaData);
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean maybeWriteGlobalState(MetaData newMetaData) {
+        if (previousMetaData == null || !MetaData.isGlobalStateEquals(previousMetaData, newMetaData)) {
+            try {
+                metaStateService.writeGlobalState("changed", newMetaData);
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean maybeInitializePreviouslyWrittenIndices(ClusterState state, MetaData newMetaData) {
+        if (previousMetaData == null) {
+            try {
+                if (isDataOnlyNode(state)) {
+                    previouslyWrittenIndices = getClosedIndicesOnDisk(state, newMetaData);
+                }
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private Set<Index> getClosedIndicesOnDisk(ClusterState state, MetaData newMetaData) throws IOException {
+        Set<Index> newPreviouslyWrittenIndices = new HashSet<>(previouslyWrittenIndices.size());
+        for (IndexMetaData indexMetaData : newMetaData) {
+            IndexMetaData indexMetaDataOnDisk = null;
+            if (indexMetaData.getState().equals(IndexMetaData.State.CLOSE)) {
+                indexMetaDataOnDisk = metaStateService.loadIndexState(indexMetaData.getIndex());
+            }
+            if (indexMetaDataOnDisk != null) {
+                newPreviouslyWrittenIndices.add(indexMetaDataOnDisk.getIndex());
+            }
+        }
+        return unmodifiableSet(newPreviouslyWrittenIndices);
     }
 
     public static Set<Index> getRelevantIndices(ClusterState state, ClusterState previousState, Set<Index> previouslyWrittenIndices) {
@@ -227,7 +236,7 @@ public class GatewayMetaState extends AbstractComponent implements ClusterStateA
             ensureNoPre019ShardState();
         }
         if (DiscoveryNode.isMasterNode(settings) || DiscoveryNode.isDataNode(settings)){
-            ensureNoPre019State();
+            ensureNoPre019MetadataFiles();
         }
     }
 
