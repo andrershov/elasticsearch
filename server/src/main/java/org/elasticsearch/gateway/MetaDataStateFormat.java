@@ -246,7 +246,7 @@ public abstract class MetaDataStateFormat<T> {
      * @param prefix    - filename prefix
      * @param locations - paths to directories with state folder
      * @return maximum id of state file or -1 if no such files are found
-     * @throws IOException
+     * @throws IOException if an IOException occurs
      */
     private long findMaxStateId(final String prefix, Path... locations) throws IOException {
         long maxId = -1;
