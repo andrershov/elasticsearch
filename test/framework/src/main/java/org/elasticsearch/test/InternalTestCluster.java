@@ -24,6 +24,7 @@ import com.carrotsearch.randomizedtesting.SysGlobals;
 import com.carrotsearch.randomizedtesting.generators.RandomNumbers;
 import com.carrotsearch.randomizedtesting.generators.RandomPicks;
 import com.carrotsearch.randomizedtesting.generators.RandomStrings;
+
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.store.AlreadyClosedException;
 import org.elasticsearch.ElasticsearchException;
@@ -141,6 +142,7 @@ import static org.elasticsearch.discovery.zen.ElectMasterService.DISCOVERY_ZEN_M
 import static org.elasticsearch.discovery.zen.FileBasedUnicastHostsProvider.UNICAST_HOSTS_FILE;
 import static org.elasticsearch.test.ESTestCase.assertBusy;
 import static org.elasticsearch.test.ESTestCase.awaitBusy;
+import static org.elasticsearch.test.ESTestCase.bootstrapNodes;
 import static org.elasticsearch.test.ESTestCase.getTestTransportType;
 import static org.elasticsearch.test.ESTestCase.randomFrom;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
@@ -164,10 +166,6 @@ import static org.junit.Assert.fail;
 public final class InternalTestCluster extends TestCluster {
 
     private final Logger logger = Loggers.getLogger(getClass());
-
-
-    private static final AtomicInteger clusterOrdinal = new AtomicInteger();
-
 
     public static final int DEFAULT_LOW_NUM_MASTER_NODES = 1;
     public static final int DEFAULT_HIGH_NUM_MASTER_NODES = 3;
@@ -316,7 +314,6 @@ public final class InternalTestCluster extends TestCluster {
         assert nodePrefix != null;
 
         this.mockPlugins = mockPlugins;
-
 
         sharedNodesSeeds = new long[numSharedDedicatedMasterNodes + numSharedDataNodes + numSharedCoordOnlyNodes];
         for (int i = 0; i < sharedNodesSeeds.length; i++) {
@@ -513,6 +510,8 @@ public final class InternalTestCluster extends TestCluster {
         final int ord = nextNodeId.getAndIncrement();
         final Runnable onTransportServiceStarted = () -> {}; // do not create unicast host file for this one node.
         final NodeAndClient buildNode = buildNode(ord, random.nextLong(), null, false, 1, onTransportServiceStarted);
+        assert nodes.isEmpty();
+        bootstrapNodes(true, buildNode::startNode, Collections.singletonList(buildNode.node()), logger);
         buildNode.startNode();
         publishNode(buildNode);
         return buildNode;
@@ -1090,6 +1089,8 @@ public final class InternalTestCluster extends TestCluster {
             wipePendingDataDirectories();
         }
 
+        final int prevNodeCount = nodes.size();
+
         // start any missing node
         assert newSize == numSharedDedicatedMasterNodes + numSharedDataNodes + numSharedCoordOnlyNodes;
         final int numberOfMasterNodes = numSharedDedicatedMasterNodes > 0 ? numSharedDedicatedMasterNodes : numSharedDataNodes;
@@ -1123,6 +1124,9 @@ public final class InternalTestCluster extends TestCluster {
                 onTransportServiceStarted);
             toStartAndPublish.add(nodeAndClient);
         }
+
+        bootstrapNodes(prevNodeCount == 0, () -> startAndPublishNodesAndClients(toStartAndPublish),
+            toStartAndPublish.stream().map(NodeAndClient::node).collect(Collectors.toList()), logger);
 
         startAndPublishNodesAndClients(toStartAndPublish);
 
@@ -1812,14 +1816,18 @@ public final class InternalTestCluster extends TestCluster {
             defaultMinMasterNodes = -1;
         }
         final List<NodeAndClient> nodes = new ArrayList<>();
+        final int prevMasterCount = getMasterNodesCount();
         for (Settings nodeSettings : settings) {
             nodes.add(buildNode(nodeSettings, defaultMinMasterNodes, () -> rebuildUnicastHostFiles(nodes)));
         }
-        startAndPublishNodesAndClients(nodes);
-        if (autoManageMinMasterNodes) {
-            validateClusterFormed();
-        }
-
+        bootstrapNodes(prevMasterCount == 0,
+            () -> {
+                startAndPublishNodesAndClients(nodes);
+                if (autoManageMinMasterNodes) {
+                    validateClusterFormed();
+                }
+            },
+            nodes.stream().map(NodeAndClient::node).collect(Collectors.toList()), logger);
         return nodes.stream().map(NodeAndClient::getName).collect(Collectors.toList());
     }
 
@@ -2062,6 +2070,7 @@ public final class InternalTestCluster extends TestCluster {
         return null;
     }
 
+    @Override
     public synchronized Iterable<Client> getClients() {
         ensureOpen();
         return () -> {
