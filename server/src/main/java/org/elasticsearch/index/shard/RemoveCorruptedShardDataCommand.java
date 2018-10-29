@@ -138,7 +138,7 @@ public class RemoveCorruptedShardDataCommand extends EnvironmentAwareCommand {
             }
 
             final IndexMetaData indexMetaData =
-                IndexMetaData.FORMAT.loadLatestState(logger, namedXContentRegistry, shardParent);
+                    IndexMetaData.FORMAT.loadLatestState(logger, namedXContentRegistry, shardParent).v1();
 
             final String shardIdFileName = path.getFileName().toString();
             final String nodeIdFileName = shardParentParent.getParent().getFileName().toString();
@@ -180,7 +180,7 @@ public class RemoveCorruptedShardDataCommand extends EnvironmentAwareCommand {
                                     }
 
                                     final IndexMetaData indexMetaData =
-                                        IndexMetaData.FORMAT.loadLatestState(logger, namedXContentRegistry, file);
+                                            IndexMetaData.FORMAT.loadLatestState(logger, namedXContentRegistry, file).v1();
                                     if (indexMetaData == null) {
                                         continue;
                                     }
@@ -446,7 +446,7 @@ public class RemoveCorruptedShardDataCommand extends EnvironmentAwareCommand {
     protected void newAllocationId(Environment environment, ShardPath shardPath, Terminal terminal) throws IOException {
         final Path shardStatePath = shardPath.getShardStatePath();
         final ShardStateMetaData shardStateMetaData =
-            ShardStateMetaData.FORMAT.loadLatestState(logger, namedXContentRegistry, shardStatePath);
+                ShardStateMetaData.FORMAT.loadLatestState(logger, namedXContentRegistry, shardStatePath).v1();
 
         if (shardStateMetaData == null) {
             throw new ElasticsearchException("No shard state meta data at " + shardStatePath);
@@ -471,11 +471,11 @@ public class RemoveCorruptedShardDataCommand extends EnvironmentAwareCommand {
     private void printRerouteCommand(ShardPath shardPath, Terminal terminal, boolean allocateStale) throws IOException {
         final IndexMetaData indexMetaData =
             IndexMetaData.FORMAT.loadLatestState(logger, namedXContentRegistry,
-                shardPath.getDataPath().getParent());
+                    shardPath.getDataPath().getParent()).v1();
 
         final Path nodePath = getNodePath(shardPath);
         final NodeMetaData nodeMetaData =
-            NodeMetaData.FORMAT.loadLatestState(logger, namedXContentRegistry, nodePath);
+                NodeMetaData.FORMAT.loadLatestState(logger, namedXContentRegistry, nodePath).v1();
 
         if (nodeMetaData == null) {
             throw new ElasticsearchException("No node meta data at " + nodePath);

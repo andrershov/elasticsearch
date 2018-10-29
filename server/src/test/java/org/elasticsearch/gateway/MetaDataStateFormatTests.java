@@ -46,7 +46,6 @@ import org.elasticsearch.test.ESTestCase;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.URISyntaxException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.DirectoryStream;
@@ -71,11 +70,11 @@ public class MetaDataStateFormatTests extends ESTestCase {
     /**
      * Ensure we can read a pre-generated cluster state.
      */
-    public void testReadClusterState() throws URISyntaxException, IOException {
+    public void testReadClusterState() throws IOException {
         final MetaDataStateFormat<MetaData> format = new MetaDataStateFormat<MetaData>("global-") {
 
             @Override
-            public void toXContent(XContentBuilder builder, MetaData state) throws IOException {
+            public void toXContent(XContentBuilder builder, MetaData state) {
                 fail("this test doesn't write");
             }
 
@@ -253,7 +252,7 @@ public class MetaDataStateFormatTests extends ESTestCase {
         }
         List<Path> dirList = Arrays.asList(dirs);
         Collections.shuffle(dirList, random());
-        MetaData loadedMetaData = format.loadLatestState(logger, xContentRegistry(), dirList.toArray(new Path[0]));
+        MetaData loadedMetaData = format.loadLatestState(logger, xContentRegistry(), dirList.toArray(new Path[0])).v1();
         MetaData latestMetaData = meta.get(numStates-1);
         assertThat(loadedMetaData.clusterUUID(), not(equalTo("_na_")));
         assertThat(loadedMetaData.clusterUUID(), equalTo(latestMetaData.clusterUUID()));
@@ -293,7 +292,7 @@ public class MetaDataStateFormatTests extends ESTestCase {
         DummyState state = new DummyState(randomRealisticUnicodeOfCodepointLengthBetween(1, 100), randomInt(), randomLong(),
                 randomDouble(), randomBoolean());
         format.write(state, paths);
-        assertEquals(state, format.loadLatestState(logger, NamedXContentRegistry.EMPTY, paths));
+        assertEquals(state, format.loadLatestState(logger, NamedXContentRegistry.EMPTY, paths).v1());
         ensureOnlyOneStateFile(paths);
         return state;
     }
@@ -321,7 +320,7 @@ public class MetaDataStateFormatTests extends ESTestCase {
             assertFalse(ex.isDirty());
 
             format.noFailures();
-            assertEquals(initialState, format.loadLatestState(logger, NamedXContentRegistry.EMPTY, path));
+            assertEquals(initialState, format.loadLatestState(logger, NamedXContentRegistry.EMPTY, path).v1());
         }
 
         writeAndReadStateSuccessfully(format, path);
@@ -344,7 +343,7 @@ public class MetaDataStateFormatTests extends ESTestCase {
             assertTrue(ex.isDirty());
 
             format.noFailures();
-            assertTrue(possibleStates.contains(format.loadLatestState(logger, NamedXContentRegistry.EMPTY, path)));
+            assertTrue(possibleStates.contains(format.loadLatestState(logger, NamedXContentRegistry.EMPTY, path).v1()));
         }
 
         writeAndReadStateSuccessfully(format, path);
@@ -367,7 +366,7 @@ public class MetaDataStateFormatTests extends ESTestCase {
             assertFalse(ex.isDirty());
 
             format.noFailures();
-            assertEquals(initialState, format.loadLatestState(logger, NamedXContentRegistry.EMPTY, paths));
+            assertEquals(initialState, format.loadLatestState(logger, NamedXContentRegistry.EMPTY, paths).v1());
         }
 
         writeAndReadStateSuccessfully(format, paths);
@@ -401,7 +400,7 @@ public class MetaDataStateFormatTests extends ESTestCase {
             format.noFailures();
             //we call loadLatestState not on full path set, but only on random paths from this set. This is to emulate disk failures.
             Path[] randomPaths = randomSubsetOf(randomIntBetween(1, paths.length), paths).toArray(new Path[0]);
-            DummyState stateOnDisk = format.loadLatestState(logger, NamedXContentRegistry.EMPTY, randomPaths);
+            DummyState stateOnDisk = format.loadLatestState(logger, NamedXContentRegistry.EMPTY, randomPaths).v1();
             assertTrue(possibleStates.contains(stateOnDisk));
         }
 
@@ -473,7 +472,6 @@ public class MetaDataStateFormatTests extends ESTestCase {
             this.failureMode = FailureMode.NO_FAILURES;
         }
 
-
         @Override
         public void toXContent(XContentBuilder builder, DummyState state) throws IOException {
             state.toXContent(builder, null);
@@ -483,7 +481,6 @@ public class MetaDataStateFormatTests extends ESTestCase {
         public DummyState fromXContent(XContentParser parser) throws IOException {
             return new DummyState().parse(parser);
         }
-
 
         public void noFailures() {
             this.failureMode = FailureMode.NO_FAILURES;

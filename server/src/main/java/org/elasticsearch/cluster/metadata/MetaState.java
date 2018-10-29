@@ -31,12 +31,18 @@ import org.elasticsearch.index.Index;
 
 import java.io.IOException;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
+/**
+ * This class represents the manifest file, which is the entry point for reading meta data from disk.
+ * Metadata consists of global metadata and index metadata.
+ * When new version of metadata is written it's assigned some generation long value.
+ * Global metadata generation could be obtained by calling {@link #getGlobalStateGeneration()}.
+ * Index metadata generation could be obtained by calling {@link #getIndices()}.
+ */
 public class MetaState implements ToXContentFragment {
     private final long globalStateGeneration;
     private final Map<Index, Long> indices;
@@ -46,12 +52,18 @@ public class MetaState implements ToXContentFragment {
         this.indices = indices;
     }
 
+    /**
+     * Returns global metadata generation.
+     */
     public long getGlobalStateGeneration() {
         return globalStateGeneration;
     }
 
+    /**
+     * Returns map from {@link Index} to index metadata generation.
+     */
     public Map<Index, Long> getIndices() {
-        return new HashMap<>(indices);
+        return indices;
     }
 
     @Override
@@ -68,14 +80,21 @@ public class MetaState implements ToXContentFragment {
         return Objects.hash(globalStateGeneration, indices);
     }
 
-    public static final String META_STATE_FILE_PREFIX = "meta-";
+    private static final String META_STATE_FILE_PREFIX = "meta-";
     private static final ToXContent.Params METASTATE_FORMAT_PARAMS = new ToXContent.MapParams(Collections.singletonMap("binary", "true"));
 
     public static final MetaDataStateFormat<MetaState> FORMAT = new MetaDataStateFormat<MetaState>(META_STATE_FILE_PREFIX) {
+
+        @Override
+        protected boolean autoCleanup() {
+            return false;
+        }
+
         @Override
         public void toXContent(XContentBuilder builder, MetaState state) throws IOException {
             state.toXContent(builder, METASTATE_FORMAT_PARAMS);
         }
+
         @Override
         public MetaState fromXContent(XContentParser parser) throws IOException {
             return MetaState.fromXContent(parser);
@@ -92,10 +111,8 @@ public class MetaState implements ToXContentFragment {
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        builder.startObject();
         builder.field(GENERATION_PARSE_FIELD.getPreferredName(), globalStateGeneration);
         builder.array(INDICES_PARSE_FIELD.getPreferredName(), indexEntryList().toArray());
-        builder.endObject();
         return builder;
     }
 
@@ -116,7 +133,8 @@ public class MetaState implements ToXContentFragment {
 
     private static final ConstructingObjectParser<MetaState, Void> PARSER = new ConstructingObjectParser<>(
             "state",
-            generationAndListOfIndexEntries -> new MetaState(generation(generationAndListOfIndexEntries), indicies(generationAndListOfIndexEntries)));
+            generationAndListOfIndexEntries ->
+                    new MetaState(generation(generationAndListOfIndexEntries), indicies(generationAndListOfIndexEntries)));
 
     static {
         PARSER.declareLong(ConstructingObjectParser.constructorArg(), GENERATION_PARSE_FIELD);
@@ -128,10 +146,23 @@ public class MetaState implements ToXContentFragment {
     }
 
     private static final class IndexEntry implements ToXContentFragment {
+        private static final ParseField INDEX_GENERATION_PARSE_FIELD = new ParseField("generation");
+        private static final ParseField INDEX_PARSE_FIELD = new ParseField("index");
+
+        static final ConstructingObjectParser<IndexEntry, Void> INDEX_ENTRY_PARSER = new ConstructingObjectParser<>(
+                "indexEntry",
+                indexAndGeneration -> new IndexEntry((Index) indexAndGeneration[0], (long) indexAndGeneration[1]));
+
+        static {
+            INDEX_ENTRY_PARSER.declareField(ConstructingObjectParser.constructorArg(),
+                    Index::fromXContent, INDEX_PARSE_FIELD, ObjectParser.ValueType.OBJECT);
+            INDEX_ENTRY_PARSER.declareLong(ConstructingObjectParser.constructorArg(), INDEX_GENERATION_PARSE_FIELD);
+        }
+
         private final long generation;
         private final Index index;
 
-        public IndexEntry(Index index, long generation) {
+        IndexEntry(Index index, long generation) {
             this.index = index;
             this.generation = generation;
         }
@@ -142,19 +173,6 @@ public class MetaState implements ToXContentFragment {
 
         public Index getIndex() {
             return index;
-        }
-
-        private static final ParseField INDEX_GENERATION_PARSE_FIELD = new ParseField("generation");
-        private static final ParseField INDEX_PARSE_FIELD = new ParseField("index");
-
-
-        final static ConstructingObjectParser<IndexEntry, Void> INDEX_ENTRY_PARSER = new ConstructingObjectParser<>(
-                "indexEntry",
-                indexAndGeneration -> new IndexEntry((Index)indexAndGeneration[0], (long)indexAndGeneration[1]));
-
-        static {
-            INDEX_ENTRY_PARSER.declareField(ConstructingObjectParser.constructorArg(), Index::fromXContent, INDEX_PARSE_FIELD, ObjectParser.ValueType.OBJECT);
-            INDEX_ENTRY_PARSER.declareLong(ConstructingObjectParser.constructorArg(), INDEX_GENERATION_PARSE_FIELD);
         }
 
         @Override

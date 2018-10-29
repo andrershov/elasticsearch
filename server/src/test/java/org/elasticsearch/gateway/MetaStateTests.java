@@ -22,7 +22,6 @@ package org.elasticsearch.gateway;
 import org.elasticsearch.cluster.metadata.MetaState;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.json.JsonXContent;
@@ -39,7 +38,7 @@ public class MetaStateTests extends ESTestCase {
 
     private MetaState copyState(MetaState state, boolean introduceErrors){
         long generation = state.getGlobalStateGeneration();
-        Map<Index, Long> indices = state.getIndices();
+        Map<Index, Long> indices = new HashMap<>(state.getIndices());
         if (introduceErrors) {
             if (randomBoolean()){
                 generation = generation + 1;
@@ -79,8 +78,9 @@ public class MetaStateTests extends ESTestCase {
         MetaState state = createRandomState();
 
         final XContentBuilder builder = JsonXContent.contentBuilder();
-        builder.humanReadable(true);
-        state.toXContent(builder, ToXContent.EMPTY_PARAMS);
+        builder.startObject();
+        MetaState.FORMAT.toXContent(builder, state);
+        builder.endObject();
         BytesReference bytes = BytesReference.bytes(builder);
         try (XContentParser parser = createParser(JsonXContent.jsonXContent, bytes)) {
             assertThat(MetaState.fromXContent(parser), equalTo(state));
