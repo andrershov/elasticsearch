@@ -38,6 +38,7 @@ public class TransportStats implements Writeable, ToXContentFragment {
     private final long txSize;
     private static final Version CONNECTION_STATS_INTRODUCED = Version.V_8_0_0;
     private final InboundConnectionsStats inboundConnectionsStats;
+    private final OutboundConnectionsStats outboundConnectionsStats;
 
     public InboundConnectionsStats getInboundConnectionsStats() {
         return inboundConnectionsStats;
@@ -171,14 +172,167 @@ public class TransportStats implements Writeable, ToXContentFragment {
         }
     }
 
+    public static class OutboundConnectionsStats implements Writeable, ToXContentFragment {
+        private final long failedConnections;
+        private final long openedConnections;
+        private final long closedConnections;
+        private final long requestsSentCount;
+        private final long requestsSentBytes;
+        private final long requestsTimedOut;
+        private final long responsesReceivedCount;
+        private final long responsesReceivedBytes;
+        private final long keepAlivePingsSentCount;
+        private final long keepAlivePingsSentBytes;
+        private final long keepAlivePongsReceivedCount;
+        private final long keepAlivePongsReceivedBytes;
+
+        private static final String OUTBOUND_CONNECTIONS = "outbound_connections";
+        private static final String FAILED_CONNECTIONS = "failed_connections";
+        private static final String OPENED_CONNECTIONS = "opened_connections";
+        private static final String CLOSED_CONNECTIONS = "closed_connections";
+        private static final String REQUESTS_SENT_COUNT = "req_sent_count";
+        private static final String REQUESTS_SENT_SIZE = "req_sent_size";
+        private static final String REQUESTS_SENT_SIZE_IN_BYTES = "req_sent_size_in_bytes";
+        private static final String REQUESTS_TIMED_OUT = "req_timed_out_count";
+        private static final String RESPONSES_RECEIVED_COUNT = "resp_rcv_count";
+        private static final String RESPONSES_RECEIVED_SIZE = "resp_rcv_size";
+        private static final String RESPONSES_RECEIVED_SIZE_IN_BYTES = "resp_rcv_size_in_bytes";
+        private static final String KEEP_ALIVE_PINGS_SENT_COUNT = "keep_alive_pings_sent_count";
+        private static final String KEEP_ALIVE_PINGS_SENT_SIZE = "keep_alive_pings_sent_size";
+        private static final String KEEP_ALIVE_PINGS_SENT_SIZE_IN_BYTES = "keep_alive_pings_sent_size_in_bytes";
+        private static final String KEEP_ALIVE_PONGS_RECEIVED_COUNT = "keep_alive_pongs_rcv_count";
+        private static final String KEEP_ALIVE_PONGS_RECEIVED_SIZE = "keep_alive_pongs_rcv_size";
+        private static final String KEEP_ALIVE_PONGS_RECEIVED_SIZE_IN_BYTES = "keep_alive_pongs_rcv_size_in_bytes";
+
+        public OutboundConnectionsStats(long failedConnections, long openedConnections, long closedConnections, long requestsSentCount,
+                                        long requestsSentBytes, long requestsTimedOut, long responsesReceivedCount,
+                                        long responsesReceivedBytes, long keepAlivePingsSentCount, long keepAlivePingsSentBytes,
+                                        long keepAlivePongsReceivedCount, long keepAlivePongsReceivedBytes) {
+            this.failedConnections = failedConnections;
+            this.openedConnections = openedConnections;
+            this.closedConnections = closedConnections;
+            this.requestsSentCount = requestsSentCount;
+            this.requestsSentBytes = requestsSentBytes;
+            this.requestsTimedOut = requestsTimedOut;
+            this.responsesReceivedCount = responsesReceivedCount;
+            this.responsesReceivedBytes = responsesReceivedBytes;
+            this.keepAlivePingsSentCount = keepAlivePingsSentCount;
+            this.keepAlivePingsSentBytes = keepAlivePingsSentBytes;
+            this.keepAlivePongsReceivedCount = keepAlivePongsReceivedCount;
+            this.keepAlivePongsReceivedBytes = keepAlivePongsReceivedBytes;
+        }
+
+        public OutboundConnectionsStats(StreamInput in) throws IOException {
+            this.failedConnections = in.readVLong();
+            this.openedConnections = in.readVLong();
+            this.closedConnections = in.readVLong();
+            this.requestsSentCount = in.readVLong();
+            this.requestsSentBytes = in.readVLong();
+            this.requestsTimedOut = in.readVLong();
+            this.responsesReceivedCount = in.readVLong();
+            this.responsesReceivedBytes = in.readVLong();
+            this.keepAlivePingsSentCount = in.readVLong();
+            this.keepAlivePingsSentBytes = in.readVLong();
+            this.keepAlivePongsReceivedCount = in.readVLong();
+            this.keepAlivePongsReceivedBytes = in.readVLong();
+        }
+
+        public long getFailedConnections() {
+            return failedConnections;
+        }
+
+        public long getOpenedConnections() {
+            return openedConnections;
+        }
+
+        public long getClosedConnections() {
+            return closedConnections;
+        }
+
+        public long getRequestsSentCount() {
+            return requestsSentCount;
+        }
+
+        public long getRequestsSentBytes() {
+            return requestsSentBytes;
+        }
+
+        public long getRequestsTimedOut() {
+            return requestsTimedOut;
+        }
+
+        public long getResponsesReceivedCount() {
+            return responsesReceivedCount;
+        }
+
+        public long getResponsesReceivedBytes() {
+            return responsesReceivedBytes;
+        }
+
+        public long getKeepAlivePingsSentCount() {
+            return keepAlivePingsSentCount;
+        }
+
+        public long getKeepAlivePingsSentBytes() {
+            return keepAlivePingsSentBytes;
+        }
+
+        public long getKeepAlivePongsReceivedCount() {
+            return keepAlivePongsReceivedCount;
+        }
+
+        public long getKeepAlivePongsReceivedBytes() {
+            return keepAlivePongsReceivedBytes;
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeVLong(failedConnections);
+            out.writeVLong(openedConnections);
+            out.writeVLong(closedConnections);
+            out.writeVLong(requestsSentCount);
+            out.writeVLong(requestsSentBytes);
+            out.writeVLong(requestsTimedOut);
+            out.writeVLong(responsesReceivedCount);
+            out.writeVLong(responsesReceivedBytes);
+            out.writeVLong(keepAlivePingsSentCount);
+            out.writeVLong(keepAlivePingsSentBytes);
+            out.writeVLong(keepAlivePongsReceivedCount);
+            out.writeVLong(keepAlivePongsReceivedBytes);
+        }
+
+        @Override
+        public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
+            builder.startObject(OUTBOUND_CONNECTIONS);
+            builder.field(FAILED_CONNECTIONS, failedConnections);
+            builder.field(OPENED_CONNECTIONS, openedConnections);
+            builder.field(CLOSED_CONNECTIONS, closedConnections);
+            builder.field(REQUESTS_SENT_COUNT, requestsSentCount);
+            builder.humanReadableField(REQUESTS_SENT_SIZE_IN_BYTES, REQUESTS_SENT_SIZE, new ByteSizeValue(requestsSentBytes));
+            builder.field(REQUESTS_TIMED_OUT, requestsTimedOut);
+            builder.field(RESPONSES_RECEIVED_COUNT, responsesReceivedCount);
+            builder.humanReadableField(RESPONSES_RECEIVED_SIZE_IN_BYTES, RESPONSES_RECEIVED_SIZE,
+                    new ByteSizeValue(responsesReceivedBytes));
+            builder.field(KEEP_ALIVE_PINGS_SENT_COUNT, keepAlivePingsSentCount);
+            builder.humanReadableField(KEEP_ALIVE_PINGS_SENT_SIZE_IN_BYTES, KEEP_ALIVE_PINGS_SENT_SIZE,
+                    new ByteSizeValue(keepAlivePingsSentBytes));
+            builder.field(KEEP_ALIVE_PONGS_RECEIVED_COUNT, keepAlivePongsReceivedCount);
+            builder.humanReadableField(KEEP_ALIVE_PONGS_RECEIVED_SIZE_IN_BYTES, KEEP_ALIVE_PONGS_RECEIVED_SIZE,
+                    new ByteSizeValue(keepAlivePongsReceivedBytes));
+            builder.endObject();
+            return builder;
+        }
+    }
+
     public TransportStats(long serverOpen, long rxCount, long rxSize, long txCount, long txSize,
-                          InboundConnectionsStats inboundConnectionsStats) {
+                          InboundConnectionsStats inboundConnectionsStats, OutboundConnectionsStats outboundConnectionsStats) {
         this.serverOpen = serverOpen;
         this.rxCount = rxCount;
         this.rxSize = rxSize;
         this.txCount = txCount;
         this.txSize = txSize;
         this.inboundConnectionsStats = inboundConnectionsStats;
+        this.outboundConnectionsStats = outboundConnectionsStats;
     }
 
     public TransportStats(StreamInput in) throws IOException {
@@ -193,8 +347,14 @@ public class TransportStats implements Writeable, ToXContentFragment {
             } else {
                 inboundConnectionsStats = null;
             }
+            if (in.readBoolean()) {
+                outboundConnectionsStats = new OutboundConnectionsStats(in);
+            } else {
+                outboundConnectionsStats = null;
+            }
         } else {
             inboundConnectionsStats = null;
+            outboundConnectionsStats = null;
         }
     }
 
@@ -209,6 +369,12 @@ public class TransportStats implements Writeable, ToXContentFragment {
             if (inboundConnectionsStats != null) {
                 out.writeBoolean(true);
                 inboundConnectionsStats.writeTo(out);
+            } else {
+                out.writeBoolean(false);
+            }
+            if (outboundConnectionsStats != null) {
+                out.writeBoolean(true);
+                outboundConnectionsStats.writeTo(out);
             } else {
                 out.writeBoolean(false);
             }
@@ -265,6 +431,9 @@ public class TransportStats implements Writeable, ToXContentFragment {
         builder.humanReadableField(Fields.TX_SIZE_IN_BYTES, Fields.TX_SIZE, new ByteSizeValue(txSize));
         if (inboundConnectionsStats != null) {
             inboundConnectionsStats.toXContent(builder, params);
+        }
+        if (outboundConnectionsStats != null) {
+            outboundConnectionsStats.toXContent(builder, params);
         }
         builder.endObject();
         return builder;

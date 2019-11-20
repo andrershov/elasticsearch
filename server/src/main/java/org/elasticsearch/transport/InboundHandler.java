@@ -45,6 +45,7 @@ public class InboundHandler {
 
     private final MeanMetric readBytesMetric = new MeanMetric();
     private final MeanMetric inboundRequestsMetric = new MeanMetric();
+    private final MeanMetric inboundResponsesMetric = new MeanMetric();
     private final MeanMetric inboundPingsMetric = new MeanMetric();
     private final MeanMetric inboundPongsMetric = new MeanMetric();
     private final ThreadPool threadPool;
@@ -144,6 +145,7 @@ public class InboundHandler {
                 }
                 // ignore if its null, the service logs it
                 if (handler != null) {
+                    inboundResponsesMetric.inc(getMessageSizeWithHeader(reference));
                     if (message.isError()) {
                         handlerResponseError(message.getStreamInput(), handler);
                     } else {

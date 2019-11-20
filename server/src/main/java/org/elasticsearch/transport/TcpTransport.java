@@ -119,6 +119,9 @@ public abstract class TcpTransport extends AbstractLifecycleComponent implements
     private final Set<TcpChannel> acceptedChannels = ConcurrentCollections.newConcurrentSet();
     private final CounterMetric inboundOpenedChannels = new CounterMetric();
     private final CounterMetric inboundClosedChannels = new CounterMetric();
+    private final CounterMetric openedConnections = new CounterMetric();
+    private final CounterMetric failedConnections = new CounterMetric();
+    private final CounterMetric openedChannels = new CounterMetric();
 
     // this lock is here to make sure we close this transport and disconnect all the client nodes
     // connections while no connect operations is going on
@@ -291,10 +294,12 @@ public abstract class TcpTransport extends AbstractLifecycleComponent implements
                 logger.trace(() -> new ParameterizedMessage("Tcp transport channel opened: {}", channel));
                 channels.add(channel);
             } catch (ConnectTransportException e) {
+                failedConnections.inc();
                 CloseableChannel.closeChannels(channels, false);
                 listener.onFailure(e);
                 return channels;
             } catch (Exception e) {
+                failedConnections.inc();
                 CloseableChannel.closeChannels(channels, false);
                 listener.onFailure(new ConnectTransportException(node, "general node connection failure", e));
                 return channels;
@@ -1006,6 +1011,8 @@ public abstract class TcpTransport extends AbstractLifecycleComponent implements
                         listener.onResponse(nodeChannels);
                     }, e -> closeAndFail(e instanceof ConnectTransportException ?
                         e : new ConnectTransportException(node, "general node connection failure", e))));
+                    openedConnections.inc();
+                    openedChannels.inc(channels.size());
                 } catch (Exception ex) {
                     closeAndFail(ex);
                 }
@@ -1026,6 +1033,7 @@ public abstract class TcpTransport extends AbstractLifecycleComponent implements
         }
 
         private void closeAndFail(Exception e) {
+            failedConnections.inc();
             try {
                 CloseableChannel.closeChannels(channels, false);
             } catch (Exception ex) {
